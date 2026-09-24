@@ -28,6 +28,12 @@ Place your source video somewhere such as `assets/bad_apple.mp4` and run:
 python main.py --video assets/bad_apple.mp4 --fps 30
 ```
 
+Audio is played in sync with the terminal animation through `ffplay` when it is available on the system. To disable audio explicitly:
+
+```bash
+python main.py --video assets/bad_apple.mp4 --fps 30 --no-audio
+```
+
 If you do not have a source video yet, run the built-in demo instead:
 
 ```bash
@@ -44,7 +50,7 @@ python main.py --demo --headless --frames 3
 
 - The text stream repeats continuously as `bad apple`, and the mask blanks out the silhouette regions.
 - The terminal is resized automatically at render time.
-- Audio is intentionally left optional; the focus here is on the renderer and playback timing.
+- Audio playback is handled externally via `ffplay` for synchronized source-video playback; if `ffplay` is missing, the renderer still works without sound.
 
 ## Sample output
 

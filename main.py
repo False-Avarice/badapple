@@ -4,6 +4,7 @@ import math
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,24 @@ TEXT_STREAM = "bad apple"
 
 class PlaybackInterrupted(Exception):
     pass
+
+
+def start_audio_player(video_path: str) -> subprocess.Popen | None:
+    ffplay = shutil.which("ffplay")
+    if ffplay is None:
+        return None
+
+    try:
+        proc = subprocess.Popen(
+            [ffplay, "-nodisp", "-loglevel", "quiet", "-autoexit", video_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return proc
+    except OSError:
+        return None
 
 
 def handle_broken_pipe() -> None:
@@ -117,11 +136,15 @@ def render_frame(mask: np.ndarray, offset: int = 0) -> str:
     return "\n".join(rows)
 
 
-def play_video(video_path: str, fps: float, headless: bool = False, loop: bool = True, max_frames: int | None = None):
+def play_video(video_path: str, fps: float, headless: bool = False, loop: bool = True, max_frames: int | None = None, audio_enabled: bool = True):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise FileNotFoundError(f"Could not open video: {video_path}")
 
+    if fps <= 0:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+
+    audio_proc = start_audio_player(video_path) if audio_enabled else None
     cols, rows = terminal_size()
     frame_count = 0
     start_monotonic = time.monotonic()
@@ -138,6 +161,11 @@ def play_video(video_path: str, fps: float, headless: bool = False, loop: bool =
             if max_frames is not None and frame_count >= max_frames:
                 break
 
+            target_time = start_monotonic + (frame_count / fps)
+            now = time.monotonic()
+            if now < target_time:
+                time.sleep(target_time - now)
+
             cols, rows = terminal_size()
             mask = compute_silhouette_mask(frame, cols, rows)
             rendered_lines = build_text_frame(mask, offset=frame_count * 3)
@@ -153,12 +181,17 @@ def play_video(video_path: str, fps: float, headless: bool = False, loop: bool =
                 sys.stdout.flush()
 
             frame_count += 1
-            target_elapsed = frame_count / fps
-            elapsed = time.monotonic() - start_monotonic
-            if target_elapsed > elapsed:
-                time.sleep(target_elapsed - elapsed)
     finally:
         cap.release()
+        if audio_proc is not None:
+            try:
+                audio_proc.terminate()
+                audio_proc.wait(timeout=2)
+            except Exception:
+                try:
+                    audio_proc.kill()
+                except Exception:
+                    pass
         if not headless:
             try:
                 sys.stdout.write("\x1b[?25h\x1b[0m\n")
@@ -208,6 +241,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--demo", action="store_true", help="Render a synthetic demo animation even if a video file is missing.")
     parser.add_argument("--frames", type=int, default=None, help="Limit the number of frames for demo playback or a single pass of the source video.")
     parser.add_argument("--headless", action="store_true", help="Print frames without terminal cursor control for CI or smoke tests.")
+    parser.add_argument("--audio", dest="audio", action=argparse.BooleanOptionalAction, default=True, help="Play the source video's audio via ffplay while the terminal frames advance.")
     return parser.parse_args()
 
 
@@ -224,7 +258,7 @@ def main() -> int:
         if should_demo:
             play_demo(args.fps, frame_limit=args.frames, headless=args.headless)
         else:
-            play_video(str(video_path), fps=args.fps, headless=args.headless, max_frames=args.frames)
+            play_video(str(video_path), fps=args.fps, headless=args.headless, max_frames=args.frames, audio_enabled=args.audio)
     except KeyboardInterrupt:
         return 0
     except BrokenPipeError:
